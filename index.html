@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>RBMK Reactor Simulation</title>
     <style>
         body {
@@ -65,8 +65,9 @@
         }
         .controls {
             display: flex;
-            gap: 10px;
             flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
         }
         button {
             padding: 8px 15px;
@@ -86,20 +87,18 @@
         }
         .graph-column {
             flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .graph {
-            height: 150px;
-            background-color: #222;
-            position: relative;
-            overflow: hidden;
         }
         .graph-title {
             color: white;
             text-align: center;
             margin-bottom: 5px;
             font-size: 12px;
+        }
+        .graph {
+            height: 150px;
+            background-color: #222;
+            position: relative;
+            overflow: hidden;
         }
         .warning {
             color: #f80;
@@ -116,43 +115,50 @@
             100% { opacity: 1; }
         }
         canvas {
-            width: 100% !important;
-            height: 100% !important;
+            width: 100%;
+            height: 100%;
         }
     </style>
 </head>
 <body>
     <div class="reactor-container">
         <h1>RBMK Reactor Simulation</h1>
+        
         <div class="reactor-core" id="reactorCore"></div>
+        
         <div class="control-panel">
             <div class="status-display">
                 <div>Power Output: <span id="powerOutput">0</span> MW</div>
                 <div>Reactivity: <span id="reactivity">0</span> %</div>
                 <div>Temperature: <span id="temperature">300</span> °C <span id="tempStatus"></span></div>
             </div>
+            
             <div class="controls">
                 <button id="insertRods">Insert 10 Rods</button>
                 <button id="withdrawRods">Withdraw 10 Rods</button>
                 <button id="scram">SCRAM (Emergency Shutdown)</button>
-                <button id="resetReactor">Reset</button>
+                <button id="resetBtn">Reset</button>
+                <button id="muteBtn">Mute Alarm</button>
             </div>
+            
             <div class="graph-container">
                 <div class="graph-column">
                     <div class="graph-title">Power Output (MW)</div>
-                    <div class="graph power-graph">
+                    <div class="graph">
                         <canvas id="powerChart"></canvas>
                     </div>
                 </div>
                 <div class="graph-column">
                     <div class="graph-title">Core Temperature (°C)</div>
-                    <div class="graph temp-graph">
+                    <div class="graph">
                         <canvas id="tempChart"></canvas>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <audio id="warningAudio" src="warning.mp3" loop></audio>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
@@ -163,13 +169,10 @@
             rodsInserted: 0,
             totalRods: 594,
             isScrammed: false,
-            running: false,
             powerHistory: Array(100).fill(0),
             tempHistory: Array(100).fill(300),
-            maxHistory: 100,
-            voidCoefficient: 0.5,
-            xenon: 0,
-            time: 0
+            voidCoefficient: 0.2,
+            xenon: 0
         };
 
         const reactorCore = document.getElementById('reactorCore');
@@ -180,7 +183,10 @@
         const insertRodsBtn = document.getElementById('insertRods');
         const withdrawRodsBtn = document.getElementById('withdrawRods');
         const scramBtn = document.getElementById('scram');
-        const resetBtn = document.getElementById('resetReactor');
+        const resetBtn = document.getElementById('resetBtn');
+        const muteBtn = document.getElementById('muteBtn');
+        const warningAudio = document.getElementById('warningAudio');
+        let isMuted = false;
 
         const powerCtx = document.getElementById('powerChart').getContext('2d');
         const tempCtx = document.getElementById('tempChart').getContext('2d');
@@ -188,7 +194,7 @@
         const powerChart = new Chart(powerCtx, {
             type: 'line',
             data: {
-                labels: Array(reactor.maxHistory).fill(''),
+                labels: Array(100).fill(''),
                 datasets: [{
                     label: 'Power (MW)',
                     data: reactor.powerHistory,
@@ -205,9 +211,7 @@
                 scales: {
                     x: { display: false },
                     y: {
-                        min: 0,
-                        max: 3200,
-                        ticks: { stepSize: 800 },
+                        beginAtZero: true,
                         grid: { color: 'rgba(255, 255, 255, 0.1)' }
                     }
                 },
@@ -218,7 +222,7 @@
         const tempChart = new Chart(tempCtx, {
             type: 'line',
             data: {
-                labels: Array(reactor.maxHistory).fill(''),
+                labels: Array(100).fill(''),
                 datasets: [{
                     label: 'Temperature (°C)',
                     data: reactor.tempHistory,
@@ -234,12 +238,7 @@
                 maintainAspectRatio: false,
                 scales: {
                     x: { display: false },
-                    y: {
-                        min: 300,
-                        max: 1000,
-                        ticks: { stepSize: 100 },
-                        grid: { color: 'rgba(255, 255, 255, 0.1)' }
-                    }
+                    y: { grid: { color: 'rgba(255, 255, 255, 0.1)' } }
                 },
                 plugins: { legend: { display: false } }
             }
@@ -249,35 +248,42 @@
             reactorCore.innerHTML = '';
             for (let i = 0; i < reactor.totalRods; i++) {
                 const rod = document.createElement('div');
-                rod.className = 'control-rod';
+                rod.className = 'control-rod active';
                 rod.textContent = i;
                 rod.dataset.index = i;
                 if (Math.random() < 0.15) rod.classList.add('moderator');
                 rod.addEventListener('click', toggleRod);
                 reactorCore.appendChild(rod);
             }
+            updateReactorState();
             updateDisplay();
         }
 
         function toggleRod(e) {
             if (reactor.isScrammed) return;
-            e.target.classList.toggle('active');
+            const rod = e.target;
+            rod.classList.toggle('active');
             updateReactorState();
         }
 
         function updateReactorState() {
             const activeRods = document.querySelectorAll('.control-rod.active').length;
             reactor.rodsInserted = activeRods;
+
             const rodEffectiveness = 1 - (reactor.rodsInserted / reactor.totalRods);
             const voidEffect = reactor.voidCoefficient * (reactor.temperature - 300) / 100;
             const xenonEffect = -reactor.xenon / 100;
+
             reactor.reactivity = Math.max(0, rodEffectiveness * 100 + voidEffect + xenonEffect);
             const targetPower = reactor.reactivity * 32;
-            reactor.power += (targetPower - reactor.power) * 0.05;
+            reactor.power += (targetPower - reactor.power) * 0.01;
+
             const heatProduction = reactor.power / 10;
-            const cooling = (reactor.temperature - 300) / 50;
+            const cooling = (reactor.temperature - 300) / 30;
             reactor.temperature += (heatProduction - cooling) * 0.1;
-            reactor.xenon += (reactor.power / 100 - reactor.xenon / 1000) * 0.1;
+
+            reactor.xenon += (reactor.power / 100 - reactor.xenon / 1000) * 0.05;
+
             updateDisplay();
         }
 
@@ -285,50 +291,70 @@
             powerOutput.textContent = reactor.power.toFixed(2);
             reactivityDisplay.textContent = reactor.reactivity.toFixed(2);
             temperatureDisplay.textContent = reactor.temperature.toFixed(2);
+
             tempStatus.className = '';
             if (reactor.temperature > 700) {
                 tempStatus.textContent = '(CRITICAL)';
                 tempStatus.className = 'danger';
+                if (!isMuted && warningAudio.paused) warningAudio.play();
             } else if (reactor.temperature > 500) {
                 tempStatus.textContent = '(WARNING)';
                 tempStatus.className = 'warning';
+                if (!isMuted && warningAudio.paused) warningAudio.play();
             } else {
                 tempStatus.textContent = '';
+                if (!warningAudio.paused) {
+                    warningAudio.pause();
+                    warningAudio.currentTime = 0;
+                }
             }
+
             reactor.powerHistory.shift();
             reactor.powerHistory.push(reactor.power);
+
             reactor.tempHistory.shift();
             reactor.tempHistory.push(reactor.temperature);
-            powerChart.data.datasets[0].data = reactor.powerHistory;
-            tempChart.data.datasets[0].data = reactor.tempHistory;
+
             powerChart.update();
             tempChart.update();
         }
 
+        function getRandomElements(array, count) {
+            const result = [];
+            const taken = new Set();
+            while (result.length < count && result.length < array.length) {
+                const idx = Math.floor(Math.random() * array.length);
+                if (!taken.has(idx)) {
+                    taken.add(idx);
+                    result.push(array[idx]);
+                }
+            }
+            return result;
+        }
+
         insertRodsBtn.addEventListener('click', () => {
             if (reactor.isScrammed) return;
-            const rods = document.querySelectorAll('.control-rod:not(.active)');
-            for (let i = 0; i < Math.min(10, rods.length); i++) {
-                rods[i].classList.add('active');
-            }
+            const rods = Array.from(document.querySelectorAll('.control-rod:not(.active)'));
+            const rodsToInsert = getRandomElements(rods, 10);
+            rodsToInsert.forEach(rod => rod.classList.add('active'));
             updateReactorState();
         });
 
         withdrawRodsBtn.addEventListener('click', () => {
             if (reactor.isScrammed) return;
-            const rods = document.querySelectorAll('.control-rod.active');
-            for (let i = 0; i < Math.min(10, rods.length); i++) {
-                rods[i].classList.remove('active');
-            }
+            const rods = Array.from(document.querySelectorAll('.control-rod.active'));
+            const rodsToWithdraw = getRandomElements(rods, 10);
+            rodsToWithdraw.forEach(rod => rod.classList.remove('active'));
             updateReactorState();
         });
 
         scramBtn.addEventListener('click', () => {
             reactor.isScrammed = true;
-            document.querySelectorAll('.control-rod').forEach(rod => rod.classList.add('active'));
+            const rods = document.querySelectorAll('.control-rod');
+            rods.forEach(rod => rod.classList.add('active'));
             const scramInterval = setInterval(() => {
-                reactor.power = Math.max(0, reactor.power - 200);
-                reactor.temperature = Math.max(300, reactor.temperature - 20);
+                reactor.power = Math.max(0, reactor.power - 100);
+                reactor.temperature = Math.max(300, reactor.temperature - 10);
                 updateDisplay();
                 if (reactor.power <= 0) clearInterval(scramInterval);
             }, 100);
@@ -339,23 +365,49 @@
             reactor.reactivity = 0;
             reactor.temperature = 300;
             reactor.rodsInserted = 0;
-            reactor.isScrammed = false;
-            reactor.running = false;
             reactor.xenon = 0;
-            reactor.time = 0;
-            reactor.powerHistory = Array(reactor.maxHistory).fill(0);
-            reactor.tempHistory = Array(reactor.maxHistory).fill(300);
-            initReactor();
+            reactor.isScrammed = false;
+            reactor.powerHistory = Array(100).fill(0);
+            reactor.tempHistory = Array(100).fill(300);
+
+            powerChart.data.datasets[0].data = reactor.powerHistory;
+            tempChart.data.datasets[0].data = reactor.tempHistory;
+            powerChart.update();
+            tempChart.update();
+
+            if (!warningAudio.paused) {
+                warningAudio.pause();
+                warningAudio.currentTime = 0;
+            }
+
+            const rods = document.querySelectorAll('.control-rod');
+            rods.forEach(rod => rod.classList.remove('active'));
+
+            rods.forEach(rod => {
+                if (Math.random() < 0.15) {
+                    rod.classList.add('moderator');
+                } else {
+                    rod.classList.remove('moderator');
+                }
+            });
+
+            updateDisplay();
+        });
+
+        muteBtn.addEventListener('click', () => {
+            isMuted = !isMuted;
+            muteBtn.textContent = isMuted ? 'Unmute Alarm' : 'Mute Alarm';
+            if (isMuted && !warningAudio.paused) {
+                warningAudio.pause();
+                warningAudio.currentTime = 0;
+            }
         });
 
         function simulationLoop() {
             if (!reactor.isScrammed) {
-                reactor.time += 0.1;
-                const fluctuation = (Math.random() - 0.5) * (10 + reactor.power / 100);
-                reactor.power = Math.max(0, reactor.power + fluctuation);
                 updateReactorState();
             }
-            setTimeout(() => requestAnimationFrame(simulationLoop), 200); // slowed down
+            setTimeout(simulationLoop, 250);
         }
 
         initReactor();
